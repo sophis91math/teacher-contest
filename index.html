@@ -440,12 +440,12 @@
     <form id="wish-form">
       <div class="field">
         <label for="name">상품명</label>
-        <input type="text" id="name" placeholder="예: 무선 충전기" maxlength="60" required>
+        <input type="text" id="name" placeholder="예: 무선 이어폰" maxlength="60" required>
       </div>
       <div class="row2">
         <div class="field">
           <label for="price">가격</label>
-          <input type="text" id="price" placeholder="예: 39,000원" maxlength="30" required>
+          <input type="text" id="price" placeholder="예: 38,000원" maxlength="30" required>
         </div>
         <div class="field">
           <label for="link">쇼핑몰 링크</label>
@@ -499,28 +499,11 @@
   const rankList = document.getElementById('rank-list');
   const entryList = document.getElementById('entry-list');
 
-  const STORAGE_KEY = 'wishlist:entries';
-
-  // ▼▼▼ 구글 시트 실시간 전송 설정 ▼▼▼
-  // 아래 GOOGLE_SHEET_WEBHOOK_URL에 Google Apps Script 웹앱 배포 URL을 붙여넣으면
-  // 신청이 들어올 때마다 자동으로 구글 시트에도 저장됩니다.
-  // (설정 방법은 대화창 안내를 참고하세요. 비워두면 이 기능은 그냥 건너뜁니다.)
-  const GOOGLE_SHEET_WEBHOOK_URL = '';
-  // ▲▲▲ 구글 시트 실시간 전송 설정 ▲▲▲
-
-  function sendToGoogleSheet(entry){
-    if(!GOOGLE_SHEET_WEBHOOK_URL) return;
-    try{
-      fetch(GOOGLE_SHEET_WEBHOOK_URL, {
-        method: 'POST',
-        mode: 'no-cors',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-        body: JSON.stringify(entry)
-      }).catch(()=>{ /* 네트워크 오류는 조용히 무시(로컬 저장은 이미 완료됨) */ });
-    }catch(err){
-      /* 무시 */
-    }
-  }
+  // ▼▼▼ 구글 시트 연동 설정 (필수) ▼▼▼
+  // 아래 GOOGLE_SHEET_WEBHOOK_URL에 Google Apps Script 웹앱 배포 URL을 붙여넣어야
+  // 신청 저장과 목록 불러오기가 정상 작동합니다. (설정 방법은 대화창 안내 참고)
+  const GOOGLE_SHEET_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbxDFA1aDea7JoxWEtq7E10Jaw7wBqRWRcyjT7CZ20BvuGopa_dgl3sDxvHRYSP5dfQN/exec"
+  // ▲▲▲ 구글 시트 연동 설정 ▲▲▲
 
   function escapeHtml(str){
     const div = document.createElement('div');
@@ -533,26 +516,40 @@
   }
 
   async function loadEntries(){
+    if(!GOOGLE_SHEET_WEBHOOK_URL) return [];
     try{
-      const res = await window.storage.get(STORAGE_KEY, true);
-      if(!res || !res.value) return [];
-      const parsed = JSON.parse(res.value);
-      return Array.isArray(parsed) ? parsed : [];
+      const res = await fetch(GOOGLE_SHEET_WEBHOOK_URL, { method: 'GET' });
+      if(!res.ok) return [];
+      const data = await res.json();
+      return Array.isArray(data) ? data : [];
     }catch(err){
       return [];
     }
   }
 
-  async function saveEntries(entries){
+  async function sendEntry(entry){
+    if(!GOOGLE_SHEET_WEBHOOK_URL) return false;
     try{
-      const result = await window.storage.set(STORAGE_KEY, JSON.stringify(entries), true);
-      return !!result;
+      const res = await fetch(GOOGLE_SHEET_WEBHOOK_URL, {
+        method: 'POST',
+        body: JSON.stringify(entry)
+      });
+      if(!res.ok) return false;
+      const data = await res.json();
+      return !!(data && data.result === 'success');
     }catch(err){
       return false;
     }
   }
 
+
   function render(entries){
+    if(!GOOGLE_SHEET_WEBHOOK_URL){
+      entryList.innerHTML = '<div class="empty">⚠️ 구글 시트 연동 설정이 아직 안 되어 있어요.<br>관리자에게 문의해주세요.</div>';
+      rankList.innerHTML = '<div class="empty">⚠️ 구글 시트 연동 설정이 아직 안 되어 있어요.</div>';
+      return;
+    }
+
     // 전체 목록: 최신순
     if(entries.length === 0){
       entryList.innerHTML = '<div class="empty">아직 신청 내역이 없어요.</div>';
@@ -602,6 +599,13 @@
 
   form.addEventListener('submit', async function(e){
     e.preventDefault();
+
+    if(!GOOGLE_SHEET_WEBHOOK_URL){
+      formMsg.textContent = '아직 구글 시트 연동이 설정되지 않았어요. 관리자에게 문의해주세요.';
+      formMsg.className = 'msg err';
+      return;
+    }
+
     const name = nameInput.value.trim();
     const price = priceInput.value.trim();
     const link = linkInput.value.trim();
@@ -623,13 +627,8 @@
     submitBtn.textContent = '등록 중...';
     formMsg.textContent = '';
 
-    const entries = await loadEntries();
     const newEntry = { name, price, link, ts: Date.now() };
-    entries.push(newEntry);
-    const ok = await saveEntries(entries);
-    if(ok){
-      sendToGoogleSheet(newEntry);
-    }
+    const ok = await sendEntry(newEntry);
 
     submitBtn.disabled = false;
     submitBtn.textContent = '신청하기';
@@ -638,6 +637,7 @@
       formMsg.textContent = '신청이 완료됐어요! 아래 목록에서 확인해보세요 🎉';
       formMsg.className = 'msg ok';
       form.reset();
+      const entries = await loadEntries();
       render(entries);
     }else{
       formMsg.textContent = '저장에 실패했어요. 잠시 후 다시 시도해주세요.';
