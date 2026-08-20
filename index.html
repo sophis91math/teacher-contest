@@ -613,28 +613,57 @@
 
 <script>
 (function() {
-  // 로컬 스토리지 키 (초기화 및 예시 데이터 제거 버전)
-  const STORAGE_KEY = 'hansu_2026_ai_wishlist_v2';
+  // ▼▼▼ 구글 시트 연동 설정 (필수) ▼▼▼
+  // 아래 GOOGLE_SHEET_WEBHOOK_URL에 Google Apps Script 웹앱 배포 URL을 붙여넣어야
+  // 신청 저장·조회·삭제가 정상 작동합니다. (설정 방법은 대화창 안내 참고)
+  const GOOGLE_SHEET_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbwB5_WxFkZM1J3AZ4pOjjPEls_CHehx1u1l_dXu0Qzq6GUn9EZC8YqtX5A6bIcDmJ8/exec';
+  // ▲▲▲ 구글 시트 연동 설정 ▲▲▲
 
-  // 스토리지에서 데이터 로드
-  function loadEntries() {
+  // 구글 시트에서 전체 신청 목록 불러오기
+  async function loadEntries() {
+    if (!GOOGLE_SHEET_WEBHOOK_URL) return [];
     try {
-      const data = localStorage.getItem(STORAGE_KEY);
-      if (data) {
-        return JSON.parse(data);
-      }
+      const res = await fetch(GOOGLE_SHEET_WEBHOOK_URL, { method: 'GET' });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return Array.isArray(data) ? data : [];
     } catch (e) {
-      console.error('Storage error:', e);
+      console.error('Load error:', e);
+      return [];
     }
-    return [];
   }
 
-  // 스토리지에 데이터 저장
-  function saveEntries(entries) {
+  // 구글 시트에 새 신청 추가
+  async function addEntryRemote(entry) {
+    if (!GOOGLE_SHEET_WEBHOOK_URL) return false;
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(entries));
+      const res = await fetch(GOOGLE_SHEET_WEBHOOK_URL, {
+        method: 'POST',
+        body: JSON.stringify({ action: 'add', entry: entry })
+      });
+      if (!res.ok) return false;
+      const data = await res.json();
+      return !!(data && data.result === 'success');
     } catch (e) {
-      console.error('Storage save error:', e);
+      console.error('Add error:', e);
+      return false;
+    }
+  }
+
+  // 구글 시트에서 신청 삭제
+  async function deleteEntryRemote(id) {
+    if (!GOOGLE_SHEET_WEBHOOK_URL) return false;
+    try {
+      const res = await fetch(GOOGLE_SHEET_WEBHOOK_URL, {
+        method: 'POST',
+        body: JSON.stringify({ action: 'delete', id: id })
+      });
+      if (!res.ok) return false;
+      const data = await res.json();
+      return !!(data && data.result === 'success');
+    } catch (e) {
+      console.error('Delete error:', e);
+      return false;
     }
   }
 
@@ -665,8 +694,12 @@
   }
 
   // 랭킹 및 전체 목록 화면에 렌더링
-  function renderUI() {
-    const entries = loadEntries();
+  function renderUI(entries) {
+    if (!GOOGLE_SHEET_WEBHOOK_URL) {
+      entryListEl.innerHTML = '<div class="empty">⚠️ 구글 시트 연동 설정이 아직 안 되어 있어요.<br>관리자에게 문의해주세요.</div>';
+      rankListEl.innerHTML = '<div class="empty">⚠️ 구글 시트 연동 설정이 아직 안 되어 있어요.</div>';
+      return;
+    }
 
     // 1. 전체 목록 렌더링
     entryListEl.innerHTML = '';
@@ -765,18 +798,31 @@
     }
   }
 
+  async function refresh() {
+    const entries = await loadEntries();
+    renderUI(entries);
+    return entries;
+  }
+
   // 항목 삭제
-  function deleteEntry(id) {
-    let entries = loadEntries();
-    entries = entries.filter(e => e.id !== id);
-    saveEntries(entries);
-    renderUI();
-    showMsg('선택한 항목이 삭제되었습니다.', true);
+  async function deleteEntry(id) {
+    const ok = await deleteEntryRemote(id);
+    if (ok) {
+      showMsg('선택한 항목이 삭제되었습니다.', true);
+      await refresh();
+    } else {
+      showMsg('삭제에 실패했어요. 잠시 후 다시 시도해주세요.', false);
+    }
   }
 
   // 폼 제출 이벤트 handler
-  wishForm.addEventListener('submit', function(e) {
+  wishForm.addEventListener('submit', async function(e) {
     e.preventDefault();
+
+    if (!GOOGLE_SHEET_WEBHOOK_URL) {
+      showMsg('아직 구글 시트 연동이 설정되지 않았어요. 관리자에게 문의해주세요.', false);
+      return;
+    }
 
     const nameVal = applicantNameInput.value.trim();
     const productVal = productNameInput.value.trim();
@@ -815,21 +861,25 @@
       createdAt: new Date().toISOString()
     };
 
-    const entries = loadEntries();
-    entries.unshift(newEntry); // 최신 순 추가
-    saveEntries(entries);
+    const submitBtn = wishForm.querySelector('button[type="submit"]');
+    if (submitBtn) submitBtn.disabled = true;
 
-    // 폼 초기화
-    wishForm.reset();
-    showMsg('희망 상품이 성공적으로 신청되었습니다! 🎁', true);
+    const ok = await addEntryRemote(newEntry);
 
-    // UI 다시 그리기
-    renderUI();
+    if (submitBtn) submitBtn.disabled = false;
+
+    if (ok) {
+      wishForm.reset();
+      showMsg('희망 상품이 성공적으로 신청되었습니다! 🎁', true);
+      await refresh();
+    } else {
+      showMsg('저장에 실패했어요. 잠시 후 다시 시도해주세요.', false);
+    }
   });
 
   // CSV 다운로드 기능
-  exportBtn.addEventListener('click', function() {
-    const entries = loadEntries();
+  exportBtn.addEventListener('click', async function() {
+    const entries = await loadEntries();
     if (entries.length === 0) {
       showMsg('다운로드할 신청 내역이 없습니다.', false);
       return;
@@ -861,7 +911,7 @@
 
   // 포스터 보기 기능 (화면 레이어 팝업으로 표시)
   function openPoster() {
-    window.open('poster.png','_blank');
+    lightbox.classList.add('open');
   }
 
   function closePoster() {
@@ -896,7 +946,7 @@
   }
 
   // 초기 실행
-  renderUI();
+  refresh();
 })();
 </script>
 </body>
