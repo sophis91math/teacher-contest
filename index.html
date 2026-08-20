@@ -616,23 +616,51 @@
   // ▼▼▼ 구글 시트 연동 설정 (필수) ▼▼▼
   // 아래 GOOGLE_SHEET_WEBHOOK_URL에 Google Apps Script 웹앱 배포 URL을 붙여넣어야
   // 신청 저장·조회·삭제가 정상 작동합니다. (설정 방법은 대화창 안내 참고)
-
   const GOOGLE_SHEET_WEBHOOK_URL = 'https://script.google.com/macros/s/AKfycbwB5_WxFkZM1J3AZ4pOjjPEls_CHehx1u1l_dXu0Qzq6GUn9EZC8YqtX5A6bIcDmJ8/exec';
-  
   // ▲▲▲ 구글 시트 연동 설정 ▲▲▲
 
-  // 구글 시트에서 전체 신청 목록 불러오기
-  async function loadEntries() {
-    if (!GOOGLE_SHEET_WEBHOOK_URL) return [];
-    try {
-      const res = await fetch(GOOGLE_SHEET_WEBHOOK_URL, { method: 'GET' });
-      if (!res.ok) return [];
-      const data = await res.json();
-      return Array.isArray(data) ? data : [];
-    } catch (e) {
-      console.error('Load error:', e);
-      return [];
-    }
+  // 구글 시트에서 전체 신청 목록 불러오기 (JSONP 방식 - CORS 제한 없이 안전하게 동작)
+  function loadEntries() {
+    if (!GOOGLE_SHEET_WEBHOOK_URL) return Promise.resolve([]);
+    return new Promise(function(resolve) {
+      const callbackName = 'jsonpCallback_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
+      const script = document.createElement('script');
+      let finished = false;
+
+      function cleanup() {
+        delete window[callbackName];
+        if (script.parentNode) script.parentNode.removeChild(script);
+      }
+
+      const timeoutId = setTimeout(function() {
+        if (finished) return;
+        finished = true;
+        console.error('Load timeout');
+        cleanup();
+        resolve([]);
+      }, 10000);
+
+      window[callbackName] = function(data) {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timeoutId);
+        cleanup();
+        resolve(Array.isArray(data) ? data : []);
+      };
+
+      script.onerror = function() {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timeoutId);
+        console.error('Load script error');
+        cleanup();
+        resolve([]);
+      };
+
+      const sep = GOOGLE_SHEET_WEBHOOK_URL.indexOf('?') === -1 ? '?' : '&';
+      script.src = GOOGLE_SHEET_WEBHOOK_URL + sep + 'callback=' + callbackName;
+      document.body.appendChild(script);
+    });
   }
 
   // 구글 시트에 새 신청 추가
